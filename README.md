@@ -6,27 +6,27 @@
 
 ##  Key Features
 
--  **Instant Single-Point Teleportation**
+  **Instant Single-Point Teleportation**
   - Spoof your location to any coordinate worldwide with one tap or by entering precise latitude and longitude.
 
--  **Smart Drive Mode**
+  **Smart Drive Mode**
   - Emulates realistic vehicular dynamics using OSRM driving routes.
   - Automatically simulates acceleration, deceleration at traffic lights and major intersections, highway cruising, and cornering speed reduction.
 
--  **Smart Walk Mode**
+  **Smart Walk Mode**
   - Simulates natural human walking behavior with realistic stride variation, lateral gait sway (~0.3m amplitude), street crosswalk pauses, and micro-pauses (e.g., checking phone, waiting at intersections).
 
--  **Multi-Stop Route Simulation**
+  **Multi-Stop Route Simulation**
   - Plan complex routes with unlimited waypoints and custom per-leg travel modes (Car, Walking, or Direct Line).
   - Configure customizable stationary wait durations at individual stops.
 
--  **Anti-Detection GPS Jitter & Telemetry**
+  **Anti-Detection GPS Jitter & Telemetry**
   - Micro GPS noise injection (~0.5–1.2m jitter), realistic speed variance, dynamic accuracy fluctuation (1.0–2.5m), and calculated bearings to match true hardware GPS sensors and bypass simple mock detection heuristics.
 
--  **Screen-Off Background Reliability**
+  **Screen-Off Background Reliability**
   - Built with an Android Foreground Service and Partial WakeLock management, ensuring continuous, uninterrupted location spoofing even when the device screen is off or the app is in the background.
 
--  **Nominatim Place Search & Custom Favorites**
+  **Nominatim Place Search & Custom Favorites**
   - Search global places and addresses using OpenStreetMap's Nominatim geocoding service.
   - Save frequently used coordinates as custom favorites with emojis for instant recall.
 
