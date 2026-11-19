@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.svg" width="128" alt="Alibi icon"></p>
+
 # Alibi - Mock Location & Route Spoofer 
 
 **Alibi** is an open-source, privacy-first Android application designed for advanced GPS mock location, realistic multi-stop route simulation, and anti-detection telemetry spoofing. Powered by Jetpack Compose, Material 3, OpenStreetMap (OsmDroid), and OSRM routing engine, Alibi delivers smooth, realistic location emulation for testing location-aware applications.

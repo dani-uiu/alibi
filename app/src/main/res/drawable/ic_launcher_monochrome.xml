@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Alibi themed-icon layer (Android 13+): single colour, tinted by the system. Generated from docs/icon.svg; 108x108 adaptive-icon grid. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="50.7"
+        android:pivotY="54.5"
+        android:scaleX="0.86"
+        android:scaleY="0.86"
+        android:translateX="3.30"
+        android:translateY="-0.50">
+        <path
+            android:pathData="M38.37,76.88 L44.61,65.00 A8.60,8.60 0 1,0 29.39,65.00 L35.63,76.88 Q37.00,79.49 38.37,76.88 Z"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3.0"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M34.00,61.00 a3.00,3.00 0 1,0 6.00,0 a3.00,3.00 0 1,0 -6.00,0 Z"
+            android:fillColor="#FFFFFF" />
+        <path
+            android:pathData="M37.98,45.64 a1.80,1.80 0 1,0 3.60,0 a1.80,1.80 0 1,0 -3.60,0 Z"
+            android:fillColor="#FFFFFF" />
+        <path
+            android:pathData="M38.32,39.76 a2.15,2.15 0 1,0 4.30,0 a2.15,2.15 0 1,0 -4.30,0 Z"
+            android:fillColor="#FFFFFF" />
+        <path
+            android:pathData="M40.42,35.68 a2.50,2.50 0 1,0 5.00,0 a2.50,2.50 0 1,0 -5.00,0 Z"
+            android:fillColor="#FFFFFF" />
+        <path
+            android:pathData="M63.15,68.93 L72.95,50.28 A13.50,13.50 0 1,0 49.05,50.28 L58.85,68.93 Q61.00,73.03 63.15,68.93 Z M55.80,44.00 a5.20,5.20 0 1,0 10.40,0 a5.20,5.20 0 1,0 -10.40,0 Z"
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd" />
+    </group>
+</vector>

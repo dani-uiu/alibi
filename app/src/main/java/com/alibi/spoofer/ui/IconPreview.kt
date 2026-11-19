@@ -26,13 +26,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.alibi.spoofer.R
 
-@Preview(showBackground = true, backgroundColor = 0xFF0F172A, widthDp = 420, heightDp = 640)
+@Preview(showBackground = true, backgroundColor = 0xFF121318, widthDp = 420, heightDp = 640)
 @Composable
 fun AppIconPreview() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
+            .background(Color(0xFF121318))
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(28.dp)
@@ -46,7 +46,7 @@ fun AppIconPreview() {
             )
             Text(
                 text = "Adaptive App Icon Design",
-                color = Color(0xFF38BDF8),
+                color = Color(0xFFBFC1FF),
                 fontSize = 14.sp,
                 modifier = Modifier.padding(top = 4.dp)
             )
@@ -57,7 +57,7 @@ fun AppIconPreview() {
             modifier = Modifier
                 .size(120.dp)
                 .clip(RoundedCornerShape(28.dp))
-                .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.3f), RoundedCornerShape(28.dp))
+                .border(1.dp, Color(0xFFBFC1FF).copy(alpha = 0.3f), RoundedCornerShape(28.dp))
         ) {
             Image(
                 painter = painterResource(id = R.drawable.ic_launcher_background),
@@ -145,7 +145,7 @@ fun AppIconPreview() {
                 Box(
                     modifier = Modifier
                         .size(72.dp)
-                        .border(1.dp, Color(0xFF34D399).copy(alpha = 0.4f))
+                        .border(1.dp, Color(0xFF7EE8EE).copy(alpha = 0.4f))
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.ic_launcher_background),
@@ -166,13 +166,13 @@ fun AppIconPreview() {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF1E293B), RoundedCornerShape(12.dp))
+                .background(Color(0xFF292A2F), RoundedCornerShape(12.dp))
                 .padding(16.dp)
         ) {
             Text("Color Specs:", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
             Text("• Background: Dark Slate Navy (#0F172A)", color = Color(0xFF94A3B8), fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-            Text("• Primary Emblem: Sky Blue (#38BDF8)", color = Color(0xFF38BDF8), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
-            Text("• Route & Waypoints: Emerald (#34D399)", color = Color(0xFF34D399), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            Text("• Primary Emblem: Sky Blue (#38BDF8)", color = Color(0xFFBFC1FF), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            Text("• Route & Waypoints: Emerald (#34D399)", color = Color(0xFF7EE8EE), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
         }
     }
 }
