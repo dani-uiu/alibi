@@ -1,6 +1,5 @@
 package com.alibi.spoofer.service
 
-import android.R
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
@@ -17,10 +16,13 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.alibi.spoofer.MainActivity
+import com.alibi.spoofer.R
+import com.alibi.spoofer.util.CoordinateParser
+import com.alibi.spoofer.util.LatLng
 import com.alibi.spoofer.util.RouteCalculator
+import com.alibi.spoofer.util.SimulatedRoute
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
-import com.alibi.spoofer.util.LatLng
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,48 +32,49 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicReference
+
+enum class SpoofPhase { IDLE, PINNED, MOVING, WAITING, ARRIVED }
+
+enum class SpoofError { MOCK_NOT_ALLOWED, PROVIDER_FAILED, NO_ROUTE }
 
 data class SpooferState(
     val isRunning: Boolean = false,
+    val phase: SpoofPhase = SpoofPhase.IDLE,
     val currentLocation: LatLng? = null,
-    val routePoints: List<LatLng> = emptyList(),
-    val currentIndex: Int = 0,
-    val speedKmH: Double = 50.0,
     val isRouteMode: Boolean = false,
-    val isSmartDrive: Boolean = false,
-    val errorMessage: String? = null
-)
+    val currentIndex: Int = 0,
+    val totalPoints: Int = 0,
+    /** Estimated seconds left in the route, including waits. */
+    val secondsRemaining: Int = 0,
+    /** Seconds left at the current stop while [phase] is WAITING. */
+    val waitSecondsRemaining: Int = 0,
+    val speedKmH: Double = 0.0,
+    val error: SpoofError? = null
+) {
+    val progress: Float
+        get() = if (totalPoints <= 1) 0f else (currentIndex.toFloat() / (totalPoints - 1)).coerceIn(0f, 1f)
+}
+
+/**
+ * Passes a route from the UI to the service inside the same process.
+ * Routes can be far bigger than the ~1 MB Binder limit, so they never go in an Intent.
+ */
+object RouteHandoff {
+    private val pending = AtomicReference<SimulatedRoute?>(null)
+    fun put(route: SimulatedRoute) = pending.set(route)
+    fun take(): SimulatedRoute? = pending.getAndSet(null)
+}
 
 class LocationSpooferService : Service() {
 
-    private val serviceJob = SupervisorJob()
-    private val serviceScope = CoroutineScope(Dispatchers.Default + serviceJob)
+    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var tickerJob: Job? = null
-
     private var wakeLock: PowerManager.WakeLock? = null
-
-    private fun acquireWakeLock() {
-        if (wakeLock == null) {
-            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "App:LocationSpooferWakeLock"
-            ).apply {
-                setReferenceCounted(false)
-                acquire(10 * 60 * 60 * 1000L) // 10 hours max timeout
-            }
-        }
-    }
-
-    private fun releaseWakeLock() {
-        wakeLock?.let {
-            if (it.isHeld) {
-                it.release()
-            }
-        }
-        wakeLock = null
-    }
+    private var lastNotificationText: String? = null
 
     private lateinit var locationManager: LocationManager
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -84,16 +87,17 @@ class LocationSpooferService : Service() {
 
         const val EXTRA_LATITUDE = "extra_latitude"
         const val EXTRA_LONGITUDE = "extra_longitude"
-        const val EXTRA_SPEED_KMH = "extra_speed_kmh"
-        const val EXTRA_ROUTE_LATS = "extra_route_lats"
-        const val EXTRA_ROUTE_LNGS = "extra_route_lngs"
-        const val EXTRA_IS_SMART_DRIVE = "extra_is_smart_drive"
 
         const val NOTIFICATION_CHANNEL_ID = "location_spoofer_channel"
         const val NOTIFICATION_ID = 1001
 
+        private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 60 * 1000L
+
         private val _spooferState = MutableStateFlow(SpooferState())
         val spooferState: StateFlow<SpooferState> = _spooferState.asStateFlow()
+
+        /** Lets the UI dismiss an error once it has been shown. */
+        fun clearError() = _spooferState.update { it.copy(error = null) }
     }
 
     override fun onCreate() {
@@ -105,103 +109,131 @@ class LocationSpooferService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action ?: return START_NOT_STICKY
-
-        when (action) {
+        when (intent?.action) {
             ACTION_START_SINGLE -> {
-                val lat = intent.getDoubleExtra(EXTRA_LATITUDE, 0.0)
-                val lng = intent.getDoubleExtra(EXTRA_LONGITUDE, 0.0)
-                val target = LatLng(lat, lng)
-                startSingleSpoofing(target)
-            }
-            ACTION_START_ROUTE -> {
-                val lats = intent.getDoubleArrayExtra(EXTRA_ROUTE_LATS) ?: doubleArrayOf()
-                val lngs = intent.getDoubleArrayExtra(EXTRA_ROUTE_LNGS) ?: doubleArrayOf()
-                val speed = intent.getDoubleExtra(EXTRA_SPEED_KMH, 50.0)
-                val isSmartDrive = intent.getBooleanExtra(EXTRA_IS_SMART_DRIVE, false)
-                if (lats.isNotEmpty() && lats.size == lngs.size) {
-                    val points = lats.indices.map { LatLng(lats[it], lngs[it]) }
-                    startRouteSpoofing(points, speed, isSmartDrive)
+                // Must call startForeground promptly after startForegroundService, even on bad input.
+                goForeground(getString(R.string.notif_single))
+                val lat = intent.getDoubleExtra(EXTRA_LATITUDE, Double.NaN)
+                val lng = intent.getDoubleExtra(EXTRA_LONGITUDE, Double.NaN)
+                if (CoordinateParser.isValid(lat, lng)) {
+                    startSingleSpoofing(LatLng(lat, lng))
+                } else {
+                    shutDown(SpoofError.NO_ROUTE)
                 }
             }
-            ACTION_STOP -> {
-                stopSpoofing()
-                stopForeground(STOP_FOREGROUND_REMOVE)
+            ACTION_START_ROUTE -> {
+                goForeground(getString(R.string.notif_route_starting))
+                val route = RouteHandoff.take()
+                if (route != null && !route.isEmpty) {
+                    startRouteSpoofing(route)
+                } else {
+                    shutDown(SpoofError.NO_ROUTE)
+                }
+            }
+            ACTION_STOP -> shutDown(null)
+            else -> {
+                // Restarted by the system without a command: nothing to resume.
+                stopSelf()
             }
         }
-
-        return START_STICKY
+        // Don't let the system restart us with a null intent; the UI starts us explicitly.
+        return START_NOT_STICKY
     }
 
     private fun startSingleSpoofing(target: LatLng) {
-        acquireWakeLock()
-        val text = "Spoofing single location..."
-        val notification = createNotification(text)
-        startForegroundServiceWithNotification(notification)
-
         if (!setupMockProvider()) return
-
+        acquireWakeLock()
         tickerJob?.cancel()
         _spooferState.value = SpooferState(
             isRunning = true,
-            currentLocation = target,
-            routePoints = emptyList(),
-            currentIndex = 0,
-            isRouteMode = false,
-            errorMessage = null
+            phase = SpoofPhase.PINNED,
+            currentLocation = target
         )
+        updateNotification(getString(R.string.notif_single))
 
         tickerJob = serviceScope.launch {
-            while (true) {
+            while (isActive) {
                 pushMockLocation(target, 0f, 0f)
                 delay(1000)
             }
         }
     }
 
-    private fun startRouteSpoofing(points: List<LatLng>, speedKmH: Double, isSmartDrive: Boolean = false) {
-        if (points.isEmpty()) return
-        acquireWakeLock()
-        val labelText = "Route navigation active..."
-        val notification = createNotification(labelText)
-        startForegroundServiceWithNotification(notification)
-
+    private fun startRouteSpoofing(route: SimulatedRoute) {
         if (!setupMockProvider()) return
-
+        acquireWakeLock()
         tickerJob?.cancel()
+
+        val points = route.points
         _spooferState.value = SpooferState(
             isRunning = true,
+            phase = SpoofPhase.MOVING,
             currentLocation = points.first(),
-            routePoints = points,
-            currentIndex = 0,
-            speedKmH = speedKmH,
             isRouteMode = true,
-            isSmartDrive = isSmartDrive,
-            errorMessage = null
+            totalPoints = points.size,
+            secondsRemaining = route.durationSeconds
         )
 
-        val speedMps = (speedKmH * 1000.0 / 3600.0).toFloat()
-
         tickerJob = serviceScope.launch {
-            var index = 0
-            while (true) {
+            var remaining = route.durationSeconds
+            var lastBearing = 0f
+
+            for (index in points.indices) {
                 val current = points[index]
-                val next = points.getOrNull(index + 1) ?: points.first()
-                val bearing = RouteCalculator.calculateBearing(current, next)
-                val stepDistMeters = RouteCalculator.computeDistanceMeters(current, next)
-                val calculatedSpeedMps = stepDistMeters.toFloat()
-                val currentSpeedMps = if (isSmartDrive) calculatedSpeedMps else speedMps
+                val next = points.getOrNull(index + 1)
+                // Points are one second apart, so metres to the next point = m/s.
+                val speedMps = next?.let { RouteCalculator.computeDistanceMeters(current, it) } ?: 0.0
+                if (next != null && speedMps > 0.05) {
+                    lastBearing = RouteCalculator.calculateBearing(current, next)
+                }
 
-                pushMockLocation(current, currentSpeedMps, bearing)
+                pushMockLocation(current, speedMps.toFloat(), lastBearing)
+                remaining = (remaining - 1).coerceAtLeast(0)
+                _spooferState.update {
+                    it.copy(
+                        phase = SpoofPhase.MOVING,
+                        currentLocation = current,
+                        currentIndex = index,
+                        secondsRemaining = remaining,
+                        waitSecondsRemaining = 0,
+                        speedKmH = speedMps * 3.6
+                    )
+                }
+                updateRouteNotification(_spooferState.value)
+                delay(1000)
 
-                _spooferState.value = _spooferState.value.copy(
-                    currentLocation = current,
-                    currentIndex = index
+                val hold = route.holdsAtIndex[index] ?: 0
+                for (left in hold downTo 1) {
+                    pushMockLocation(current, 0f, lastBearing)
+                    remaining = (remaining - 1).coerceAtLeast(0)
+                    _spooferState.update {
+                        it.copy(
+                            phase = SpoofPhase.WAITING,
+                            secondsRemaining = remaining,
+                            waitSecondsRemaining = left,
+                            speedKmH = 0.0
+                        )
+                    }
+                    updateRouteNotification(_spooferState.value)
+                    delay(1000)
+                }
+            }
+
+            // Arrived: stay at the destination until the user stops.
+            val destination = points.last()
+            _spooferState.update {
+                it.copy(
+                    phase = SpoofPhase.ARRIVED,
+                    currentLocation = destination,
+                    currentIndex = points.lastIndex,
+                    secondsRemaining = 0,
+                    waitSecondsRemaining = 0,
+                    speedKmH = 0.0
                 )
-
-                updateNotification("Route navigation active...")
-
-                index = (index + 1) % points.size
+            }
+            updateNotification(getString(R.string.notif_arrived))
+            while (isActive) {
+                pushMockLocation(destination, 0f, lastBearing)
                 delay(1000)
             }
         }
@@ -210,73 +242,47 @@ class LocationSpooferService : Service() {
     @SuppressLint("MissingPermission", "WrongConstant")
     private fun setupMockProvider(): Boolean {
         return try {
-            // Setup LocationManager GPS test provider
             try {
+                @Suppress("DEPRECATION")
                 locationManager.addTestProvider(
                     LocationManager.GPS_PROVIDER,
-                    false,
-                    true,
-                    false,
-                    false,
-                    true,
-                    true,
-                    true,
-                    1,
-                    1
+                    false, true, false, false, true, true, true,
+                    1, 1
                 )
             } catch (_: IllegalArgumentException) {
-                // Test provider already exists, ignore
+                // Test provider already exists
             }
             locationManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true)
-
-            // Setup FusedLocationProviderClient mock mode
             fusedLocationClient.setMockMode(true)
             true
-        } catch (e: SecurityException) {
-            _spooferState.value = _spooferState.value.copy(
-                isRunning = false,
-                errorMessage = "Mock location permission not allowed. Please set Mock Location App in Developer Options."
-            )
-            stopSelf()
+        } catch (_: SecurityException) {
+            shutDown(SpoofError.MOCK_NOT_ALLOWED)
             false
-        } catch (e: Exception) {
-            _spooferState.value = _spooferState.value.copy(
-                isRunning = false,
-                errorMessage = e.localizedMessage ?: "Failed to set mock provider"
-            )
-            stopSelf()
+        } catch (_: Exception) {
+            shutDown(SpoofError.PROVIDER_FAILED)
             false
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun pushMockLocation(latLng: LatLng, speedMps: Float, bearing: Float) {
-        // Micro GPS jitter / noise calculation
-        val jitterLat = (Math.random() - 0.5) * 0.000012 // ~0.5 to 1.2 meters
+        // Small GPS-like noise (~0.5–1.2 m)
+        val jitterLat = (Math.random() - 0.5) * 0.000012
         val jitterLng = (Math.random() - 0.5) * 0.000012
-        val jitteredLat = latLng.latitude + jitterLat
-        val jitteredLng = latLng.longitude + jitterLng
 
         val isStationary = speedMps <= 0.01f
         val actualSpeed = if (isStationary) {
-            (Math.random() * 0.08).toFloat() // 0.0f..0.08f m/s
+            (Math.random() * 0.08).toFloat()
         } else {
             (speedMps + (Math.random() - 0.5) * 0.1).toFloat().coerceAtLeast(0.0f)
         }
-
-        val actualAccuracy = (1.0 + Math.random() * 1.5).toFloat() // 1.0f..2.5f
-
-        val actualBearing = if (isStationary) {
-            (Math.random() * 360.0).toFloat() // 0.0f..360.0f
-        } else {
-            bearing
-        }
+        val actualBearing = if (isStationary) (Math.random() * 360.0).toFloat() else bearing
 
         val mockLocation = Location(LocationManager.GPS_PROVIDER).apply {
-            latitude = jitteredLat
-            longitude = jitteredLng
+            latitude = latLng.latitude + jitterLat
+            longitude = latLng.longitude + jitterLng
             altitude = 10.0 + (Math.random() - 0.5) * 0.5
-            accuracy = actualAccuracy
+            accuracy = (1.0 + Math.random() * 1.5).toFloat()
             speed = actualSpeed
             this.bearing = actualBearing
             time = System.currentTimeMillis()
@@ -291,56 +297,101 @@ class LocationSpooferService : Service() {
         try {
             locationManager.setTestProviderLocation(LocationManager.GPS_PROVIDER, mockLocation)
             fusedLocationClient.setMockLocation(mockLocation)
+        } catch (_: SecurityException) {
+            // Mock-location permission was revoked while running.
+            serviceScope.launch(Dispatchers.Main) { shutDown(SpoofError.MOCK_NOT_ALLOWED) }
         } catch (_: Exception) {
-            // Ignore individual push errors
+            // Ignore a single failed push
         }
     }
 
+    /** Stops spoofing, removes the test provider and the notification, and ends the service. */
     @SuppressLint("MissingPermission")
-    private fun stopSpoofing() {
+    private fun shutDown(error: SpoofError?) {
         tickerJob?.cancel()
         tickerJob = null
         releaseWakeLock()
+        removeMockProvider()
+        _spooferState.value = SpooferState(isRunning = false, error = error)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
 
+    @SuppressLint("MissingPermission")
+    private fun removeMockProvider() {
         try {
             locationManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, false)
             locationManager.removeTestProvider(LocationManager.GPS_PROVIDER)
         } catch (_: Exception) {
-            // Ignore removal errors if not registered
+            // Not registered
         }
-
         try {
             fusedLocationClient.setMockMode(false)
         } catch (_: Exception) {
             // Ignore
         }
-
-        _spooferState.value = SpooferState(isRunning = false)
-
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
-    private fun startForegroundServiceWithNotification(notification: Notification) {
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "Alibi:LocationSpooferWakeLock"
+        ).apply {
+            setReferenceCounted(false)
+            acquire(WAKE_LOCK_TIMEOUT_MS)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+    }
+
+    private fun goForeground(text: String) {
+        val notification = buildNotification(text)
+        lastNotificationText = text
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            )
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+    }
+
+    private fun updateRouteNotification(state: SpooferState) {
+        val minutesLeft = (state.secondsRemaining + 59) / 60
+        val percent = (state.progress * 100).toInt()
+        val text = if (state.phase == SpoofPhase.WAITING) {
+            getString(R.string.notif_waiting, formatClock(state.waitSecondsRemaining))
+        } else {
+            getString(R.string.notif_route_progress, percent, minutesLeft)
+        }
+        updateNotification(text)
+    }
+
+    /** Only re-posts the notification when its text actually changes. */
+    private fun updateNotification(text: String) {
+        if (text == lastNotificationText) return
+        lastNotificationText = text
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    private fun formatClock(seconds: Int): String {
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        val s = seconds % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                "Mock Location Spoofer Channel",
+                getString(R.string.notif_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows mock location spoofer status"
+                description = getString(R.string.notif_channel_desc)
                 setSound(null, null)
                 enableVibration(false)
             }
@@ -348,41 +399,29 @@ class LocationSpooferService : Service() {
         }
     }
 
-    private fun createNotification(contentText: String): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
+    private fun buildNotification(contentText: String): Notification {
+        val openApp = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
-        val stopIntent = Intent(this, LocationSpooferService::class.java).apply {
-            action = ACTION_STOP
-        }
-        val stopPendingIntent = PendingIntent.getService(
-            this,
-            1,
-            stopIntent,
+        val stop = PendingIntent.getService(
+            this, 1,
+            Intent(this, LocationSpooferService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Mock Location Active")
+            .setContentTitle(getString(R.string.notif_title))
             .setContentText(contentText)
-            .setSmallIcon(R.drawable.ic_menu_compass)
-            .setContentIntent(pendingIntent)
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentIntent(openApp)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOnlyAlertOnce(true)
-            .setSound(null)
-            .setVibrate(null)
-            .addAction(R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.stop), stop)
             .build()
-    }
-
-    private fun updateNotification(contentText: String) {
-        val notification = createNotification(contentText)
-        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -391,7 +430,10 @@ class LocationSpooferService : Service() {
         tickerJob?.cancel()
         serviceScope.cancel()
         releaseWakeLock()
-        stopSpoofing()
+        removeMockProvider()
+        if (_spooferState.value.isRunning) {
+            _spooferState.value = SpooferState(isRunning = false)
+        }
         super.onDestroy()
     }
 }

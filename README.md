@@ -34,36 +34,52 @@
 
 ##  Open Source Tech Stack
 
-- **Language:** 100% Modern [Kotlin](https://kotlinlang.org/)
-- **UI Framework:** [Jetpack Compose](https://developer.android.com/jetpack/compose) with Material Design 3 (M3)
-- **Map & GIS:** [OsmDroid](https://github.com/osmdroid/osmdroid) (OpenStreetMap for Android)
-- **Routing Engine:** [OSRM (Open Source Routing Machine)](http://project-osrm.org/) API with foot & vehicle profiles
-- **Geocoding:** [Nominatim Search Engine](https://nominatim.openstreetmap.org/)
-- **Location API:** Google Play Services Fused Location Provider Client & Android `LocationManager`
-- **Asynchronous Execution:** Kotlin Coroutines & `StateFlow`
+- **Language:** 100% [Kotlin](https://kotlinlang.org/)
+- **UI:** [Jetpack Compose](https://developer.android.com/jetpack/compose) with Material 3, a `ViewModel` holding all screen state, English and Spanish strings
+- **Map:** [OsmDroid](https://github.com/osmdroid/osmdroid) with OpenStreetMap tiles
+- **Search:** [Photon](https://photon.komoot.io/) for search-as-you-type (biased toward the visible map area) and [Nominatim](https://nominatim.openstreetmap.org/) when you press search. Coordinates and map links are recognised offline.
+- **Routing:** [OSRM](http://project-osrm.org/) car and foot profiles, including per-segment road speeds for Smart Drive
+- **Location API:** Fused Location Provider and `LocationManager` test providers
+- **Async:** Kotlin Coroutines and `StateFlow`
 
 ---
 
 ##  Architecture & Project Structure
 
-The project follows clean Android architectural guidelines with clear package separation under `com.alibi.spoofer`:
-
 ```
 app/src/main/java/com/alibi/spoofer/
-├── MainActivity.kt                  # Main UI activity & Jetpack Compose entry point
-├── Drawables.kt                     # Custom canvas-rendered map marker drawables
+├── MainActivity.kt                  # Entry point: sets the Compose content
+├── Drawables.kt                     # Canvas-drawn map marker icons
 ├── service/
-│   └── LocationSpooferService.kt    # Foreground service handling GPS mock provider updates
+│   └── LocationSpooferService.kt    # Foreground service that plays a location or route, one fix per second
 ├── ui/
-│   ├── IconPreview.kt               # Adaptive icon preview component
-│   └── theme/                       # Material 3 design tokens (Color, Theme, Type)
+│   ├── SpooferViewModel.kt          # Screen state, route calculation, search, saved places
+│   ├── SpooferScreen.kt             # Map + search + bottom sheet layout, permissions, dialogs
+│   ├── ControlSheet.kt              # Status header, setup guidance, mode switch, saved places
+│   ├── RouteEditor.kt               # Stops timeline and per-leg settings
+│   ├── SearchBar.kt                 # Search field and results
+│   ├── OsmMap.kt                    # OsmDroid map wrapper
+│   ├── Dialogs.kt, Format.kt        # Dialogs and formatting helpers
+│   └── theme/                       # Material 3 colours, type and shapes
 └── util/
-    ├── CustomLocationRepository.kt  # Persistent storage for saved favorite locations
-    ├── LatLng.kt                    # Geographic coordinate data structures & OsmDroid converters
-    ├── NominatimSearch.kt           # Geocoding network client
-    ├── RouteCalculator.kt           # Route interpolation, polyline decoding, & Smart Drive/Walk algorithms
-    └── Waypoint.kt                  # Route waypoint data models
+    ├── RouteCalculator.kt           # OSRM routing, polyline decoding, Smart Drive/Walk sampling
+    ├── PlaceSearch.kt               # Photon + Nominatim geocoding
+    ├── CoordinateParser.kt          # "lat, lng", comma decimals, map links, geo: URIs
+    ├── Http.kt                      # Shared HTTP client with typed errors
+    ├── CustomLocationRepository.kt  # Saved places (SharedPreferences)
+    ├── Waypoint.kt                  # Waypoint and SimulatedRoute models
+    └── LatLng.kt                    # Coordinate type and OsmDroid converters
 ```
+
+How a route plays: the ViewModel builds a `SimulatedRoute` (one point per second, with waits stored as timers rather than repeated points) and hands it to the service in-process, so long routes aren't limited by Android's ~1 MB Intent size. When the route finishes, the location stays at the destination until you press Stop.
+
+---
+
+##  Privacy
+
+- Saved places stay on the device. They are excluded from Google cloud backup (they can contain addresses like "Home") but move with a direct phone-to-phone transfer.
+- Search text and route coordinates are sent to the public OpenStreetMap services listed above, identified only by the app name and version.
+- No analytics, no accounts, no ads.
 
 ---
 
@@ -79,8 +95,8 @@ app/src/main/java/com/alibi/spoofer/
 
 1. **Clone the Repository:**
    ```bash
-   git clone https://github.com/alibi/spoofer.git
-   cd spoofer
+   git clone https://github.com/dani-uiu/alibi.git
+   cd alibi
    ```
 
 2. **Enable Developer Options on Android Device:**

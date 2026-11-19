@@ -1,30 +1,152 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Alibi</string>
-    <string name="search_place">Search place or address&#8230;</string>
-    <string name="custom_locations">Custom Locations</string>
-    <string name="save_location">+ Save Location</string>
-    <string name="manual_coordinates">Manual Coordinates</string>
-    <string name="teleport">Teleport</string>
-    <string name="start_route">Start Route</string>
-    <string name="stop">Stop</string>
-    <string name="speed">Speed</string>
-    <string name="wait_time">Wait Time</string>
-    <string name="mode">Mode</string>
-    <string name="single">Single</string>
-    <string name="route">Route</string>
-    <string name="clear_route">Clear Route</string>
-    <string name="mock_location_disabled">Mock Location not enabled in Developer Options</string>
-    <string name="setup_mock_app">Setup Mock App</string>
-    <string name="dismiss">Dismiss</string>
-    <string name="unknown_location">Unknown Location</string>
-    <string name="speed_kmh">%.1f km/h</string>
-    <string name="current_speed">Speed: %.1f km/h</string>
-    <string name="location_name">Name</string>
-    <string name="location_desc">Description</string>
+    <string name="app_name" translatable="false">Alibi</string>
+
+    <!-- Common -->
     <string name="cancel">Cancel</string>
     <string name="save">Save</string>
-    <string name="latitude">Latitude</string>
-    <string name="longitude">Longitude</string>
-    <string name="set_location">Set</string>
+    <string name="set">Set</string>
+    <string name="close">Close</string>
+    <string name="clear">Clear</string>
+    <string name="retry">Retry</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="undo">Undo</string>
+    <string name="remove">Remove</string>
+    <string name="grant">Grant access</string>
+    <string name="start">Start</string>
+    <string name="stop">Stop</string>
+    <string name="teleport">Teleport</string>
+    <string name="move_here">Move here</string>
+    <string name="my_location">My location</string>
+    <string name="use_my_location">Use my location</string>
+    <string name="start_from_my_location">Start from my location</string>
+    <string name="osm_attribution" translatable="false">© OpenStreetMap contributors</string>
+
+    <!-- Search -->
+    <string name="search_hint">Search places, addresses or coordinates</string>
+    <string name="searching">Searching…</string>
+    <string name="search_more">Show more results</string>
+    <string name="search_no_results">No places found. Try a different spelling or add the city.</string>
+    <string name="search_press_enter">Keep typing, or press search for a deeper search.</string>
+    <string name="search_action">Search</string>
+    <string name="go_to_coordinates">Go to coordinates</string>
+    <string name="cd_close_search">Close search</string>
+    <string name="cd_clear_search">Clear search</string>
+    <string name="cd_more_options">More options</string>
+    <string name="menu_developer_options">Developer options</string>
+    <string name="menu_about">About Alibi</string>
+
+    <!-- Network errors -->
+    <string name="error_offline">You\'re offline. Check your connection and try again.</string>
+    <string name="error_timeout">The server took too long to answer. Try again.</string>
+    <string name="error_rate_limited">Too many requests. Wait a few seconds and try again.</string>
+    <string name="error_server">The search service isn\'t responding right now.</string>
+
+    <!-- Status header -->
+    <string name="status_ready">Ready</string>
+    <string name="status_pinned">Location active</string>
+    <string name="status_moving">On the move · %1$d km/h</string>
+    <string name="status_waiting">Waiting at stop</string>
+    <string name="status_arrived">Arrived</string>
+    <string name="status_holding">Holding at the destination until you stop</string>
+    <string name="status_progress">%1$d%% · %2$s left</string>
+    <string name="status_wait_left">%1$s left at this stop</string>
+    <string name="status_point_selected">Selected point</string>
+    <string name="status_pick_location">Pick a location</string>
+    <string name="status_pick_hint">Search, tap the map, or choose a saved place</string>
+    <string name="status_plan_route">Plan a route</string>
+    <plurals name="status_route_hint">
+        <item quantity="one">Tap the map to add stops (%d added)</item>
+        <item quantity="other">Tap the map to add stops (%d added)</item>
+    </plurals>
+    <string name="status_calculating">Calculating route…</string>
+    <string name="status_route_failed">Couldn\'t calculate the route</string>
+    <plurals name="stops_count">
+        <item quantity="one">%d stop</item>
+        <item quantity="other">%d stops</item>
+    </plurals>
+
+    <!-- Setup & errors -->
+    <string name="setup_permission_title">Location access needed</string>
+    <string name="setup_permission_body">Alibi needs location access to show where you really are and to set a simulated location.</string>
+    <string name="setup_mock_title">Finish setup</string>
+    <string name="setup_mock_body">1. Turn on Developer options (Settings › About phone › tap Build number 7 times).\n2. In Developer options, open \"Select mock location app\" and choose Alibi.</string>
+    <string name="open_developer_options">Open Developer options</string>
+    <string name="error_title">Simulation stopped</string>
+    <string name="error_mock_not_allowed">Alibi isn\'t set as the mock location app. Select it in Developer options and try again.</string>
+    <string name="error_provider">The system wouldn\'t accept a simulated location on this device.</string>
+    <string name="error_no_route">There was no valid location or route to play.</string>
+
+    <!-- Modes -->
+    <string name="mode_teleport">Teleport</string>
+    <string name="mode_route">Route</string>
+    <string name="mode_car">Car</string>
+    <string name="mode_walk">Walk</string>
+    <string name="mode_line">Line</string>
+
+    <!-- Route editor -->
+    <string name="route_empty_hint">Tap the map or search to add your first stop. Add at least two to make a route.</string>
+    <string name="stop_start">Start</string>
+    <string name="stop_destination">Destination</string>
+    <string name="stop_n">Stop %d</string>
+    <string name="wait">Wait</string>
+    <string name="move_up">Move up</string>
+    <string name="move_down">Move down</string>
+    <string name="cd_stop_options">Stop options</string>
+    <string name="cd_expand">Expand</string>
+    <string name="cd_collapse">Collapse</string>
+    <string name="smart">Smart</string>
+    <string name="smart_title">Smart pace</string>
+    <string name="smart_desc_car">Real road speeds, traffic lights and turns</string>
+    <string name="smart_desc_walk">Natural gait, crossings and short pauses</string>
+    <string name="smart_desc_line">Adaptive pace along a straight line</string>
+    <string name="smart_all_title">Smart pace for all legs</string>
+    <string name="smart_all_desc">Speeds adapt to the road instead of staying fixed</string>
+    <string name="speed_all_legs">Speed for all legs</string>
+
+    <!-- Wait dialog -->
+    <string name="wait_dialog_title">Wait at this stop</string>
+    <string name="wait_dialog_body">How long should the location stay here before moving on?</string>
+    <string name="hours">Hours</string>
+    <string name="minutes">Minutes</string>
+    <string name="no_wait">None</string>
+    <string name="wait_too_long">Waits can be at most 24 hours.</string>
+
+    <!-- Saved places -->
+    <string name="saved_places">Saved places</string>
+    <string name="saved_places_empty">Save places you use often to jump to them with one tap.</string>
+    <string name="save_place">Save</string>
+    <string name="save_place_title">Save place</string>
+    <string name="place_name">Name</string>
+    <string name="place_name_hint">e.g. Office, Gym, Café</string>
+    <string name="coordinates">Coordinates</string>
+    <string name="coordinates_help">Latitude, longitude. You can paste a map link.</string>
+    <string name="coordinates_invalid">Not valid coordinates, e.g. 19.4326, -99.1332</string>
+    <string name="cd_delete_place">Delete %s</string>
+
+    <!-- Map -->
+    <string name="cd_follow_location">Follow location</string>
+    <string name="cd_stop_following">Stop following</string>
+
+    <!-- Snackbar messages -->
+    <string name="msg_place_saved">Saved \"%s\"</string>
+    <string name="msg_place_deleted">Deleted \"%s\"</string>
+    <string name="msg_location_unavailable">Your location isn\'t available yet. Try again in a moment.</string>
+    <string name="msg_route_fallback">Couldn\'t get directions for some legs, so they use a straight line.</string>
+    <string name="msg_set_mock_app">Set Alibi as the mock location app in Developer options first.</string>
+    <string name="msg_service_failed">Couldn\'t start the location service.</string>
+
+    <!-- About -->
+    <string name="about_body">Open-source mock location and route simulator for testing location-aware apps.</string>
+    <string name="about_data">Maps and data © OpenStreetMap contributors. Search by Photon (komoot) and Nominatim. Routing by OSRM.</string>
+
+    <!-- Notification -->
+    <string name="notif_channel_name">Simulated location</string>
+    <string name="notif_channel_desc">Shown while Alibi is simulating your location</string>
+    <string name="notif_title">Simulated location active</string>
+    <string name="notif_single">Holding a fixed location</string>
+    <string name="notif_route_starting">Starting route…</string>
+    <string name="notif_route_progress">Route %1$d%% · %2$d min left</string>
+    <string name="notif_waiting">Waiting at stop · %1$s left</string>
+    <string name="notif_arrived">Arrived. Holding at the destination.</string>
 </resources>
