@@ -27,29 +27,47 @@ object CustomLocationRepository {
     fun getCustomLocations(context: Context): List<CustomLocation> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val jsonStr = prefs.getString(KEY_CUSTOM_LOCATIONS, null) ?: return emptyList()
+        val jsonArray = try {
+            JSONArray(jsonStr)
+        } catch (_: Exception) {
+            return emptyList()
+        }
         val list = mutableListOf<CustomLocation>()
-        try {
-            val jsonArray = JSONArray(jsonStr)
-            for (i in 0 until jsonArray.length()) {
+        // Parse entries one by one so a single bad entry doesn't drop the rest.
+        for (i in 0 until jsonArray.length()) {
+            try {
                 val obj = jsonArray.getJSONObject(i)
+                val lat = obj.getDouble("lat")
+                val lng = obj.getDouble("lng")
+                if (!CoordinateParser.isValid(lat, lng)) continue
                 list.add(
                     CustomLocation(
                         id = obj.optString("id", UUID.randomUUID().toString()),
                         name = obj.getString("name"),
                         emoji = obj.optString("emoji", "📍"),
-                        lat = obj.getDouble("lat"),
-                        lng = obj.getDouble("lng"),
+                        lat = lat,
+                        lng = lng,
                         isDefault = false
                     )
                 )
+            } catch (_: Exception) {
+                // skip malformed entry
             }
-        } catch (_: Exception) {}
+        }
         return list
     }
 
     fun saveCustomLocation(context: Context, location: CustomLocation) {
         val current = getCustomLocations(context).toMutableList()
         current.add(location)
+        saveList(context, current)
+    }
+
+    /** Re-inserts a previously deleted location at its old position (for "Undo"). */
+    fun restoreCustomLocation(context: Context, location: CustomLocation, position: Int) {
+        val current = getCustomLocations(context).toMutableList()
+        if (current.any { it.id == location.id }) return
+        current.add(position.coerceIn(0, current.size), location)
         saveList(context, current)
     }
 

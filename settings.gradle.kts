@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Trace"
+rootProject.name = "Alibi"
 include(":app")
  

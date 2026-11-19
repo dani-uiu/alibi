@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Common -->
+    <string name="cancel">Cancelar</string>
+    <string name="save">Guardar</string>
+    <string name="set">Aplicar</string>
+    <string name="close">Cerrar</string>
+    <string name="clear">Borrar</string>
+    <string name="retry">Reintentar</string>
+    <string name="dismiss">Cerrar</string>
+    <string name="undo">Deshacer</string>
+    <string name="remove">Quitar</string>
+    <string name="grant">Dar acceso</string>
+    <string name="start">Iniciar</string>
+    <string name="stop">Detener</string>
+    <string name="teleport">Teletransportar</string>
+    <string name="move_here">Mover aquí</string>
+    <string name="my_location">Mi ubicación</string>
+    <string name="use_my_location">Usar mi ubicación</string>
+    <string name="start_from_my_location">Salir desde mi ubicación</string>
+
+    <!-- Search -->
+    <string name="search_hint">Busca lugares, direcciones o coordenadas</string>
+    <string name="searching">Buscando…</string>
+    <string name="search_more">Ver más resultados</string>
+    <string name="search_no_results">No se encontraron lugares. Prueba otra forma de escribirlo o agrega la ciudad.</string>
+    <string name="search_press_enter">Sigue escribiendo o presiona buscar para una búsqueda más completa.</string>
+    <string name="search_action">Buscar</string>
+    <string name="go_to_coordinates">Ir a las coordenadas</string>
+    <string name="cd_close_search">Cerrar búsqueda</string>
+    <string name="cd_clear_search">Borrar búsqueda</string>
+    <string name="cd_more_options">Más opciones</string>
+    <string name="menu_developer_options">Opciones de desarrollador</string>
+    <string name="menu_about">Acerca de Alibi</string>
+
+    <!-- Network errors -->
+    <string name="error_offline">Sin conexión. Revisa tu internet e inténtalo de nuevo.</string>
+    <string name="error_timeout">El servidor tardó demasiado en responder. Inténtalo de nuevo.</string>
+    <string name="error_rate_limited">Demasiadas solicitudes. Espera unos segundos e inténtalo de nuevo.</string>
+    <string name="error_server">El servicio de búsqueda no responde en este momento.</string>
+
+    <!-- Status header -->
+    <string name="status_ready">Listo</string>
+    <string name="status_pinned">Ubicación activa</string>
+    <string name="status_moving">En movimiento · %1$d km/h</string>
+    <string name="status_waiting">Esperando en la parada</string>
+    <string name="status_arrived">Llegaste</string>
+    <string name="status_holding">Se mantiene en el destino hasta que detengas</string>
+    <string name="status_progress">%1$d%% · faltan %2$s</string>
+    <string name="status_wait_left">Faltan %1$s en esta parada</string>
+    <string name="status_point_selected">Punto seleccionado</string>
+    <string name="status_pick_location">Elige una ubicación</string>
+    <string name="status_pick_hint">Busca, toca el mapa o elige un lugar guardado</string>
+    <string name="status_plan_route">Planea una ruta</string>
+    <plurals name="status_route_hint">
+        <item quantity="one">Toca el mapa para agregar paradas (%d agregada)</item>
+        <item quantity="many">Toca el mapa para agregar paradas (%d agregadas)</item>
+        <item quantity="other">Toca el mapa para agregar paradas (%d agregadas)</item>
+    </plurals>
+    <string name="status_calculating">Calculando ruta…</string>
+    <string name="status_route_failed">No se pudo calcular la ruta</string>
+    <plurals name="stops_count">
+        <item quantity="one">%d parada</item>
+        <item quantity="many">%d paradas</item>
+        <item quantity="other">%d paradas</item>
+    </plurals>
+
+    <!-- Setup & errors -->
+    <string name="setup_permission_title">Se necesita acceso a la ubicación</string>
+    <string name="setup_permission_body">Alibi necesita acceso a tu ubicación para mostrar dónde estás realmente y para fijar una ubicación simulada.</string>
+    <string name="setup_mock_title">Termina la configuración</string>
+    <string name="setup_mock_body">1. Activa las Opciones de desarrollador (Ajustes › Acerca del teléfono › toca 7 veces el Número de compilación).\n2. En Opciones de desarrollador, abre \"Seleccionar app de ubicación de prueba\" y elige Alibi.</string>
+    <string name="open_developer_options">Abrir Opciones de desarrollador</string>
+    <string name="error_title">La simulación se detuvo</string>
+    <string name="error_mock_not_allowed">Alibi no está configurada como app de ubicación de prueba. Selecciónala en Opciones de desarrollador e inténtalo de nuevo.</string>
+    <string name="error_provider">El sistema no aceptó una ubicación simulada en este dispositivo.</string>
+    <string name="error_no_route">No había una ubicación o ruta válida para reproducir.</string>
+
+    <!-- Modes -->
+    <string name="mode_teleport">Teletransporte</string>
+    <string name="mode_route">Ruta</string>
+    <string name="mode_car">Auto</string>
+    <string name="mode_walk">A pie</string>
+    <string name="mode_line">Línea</string>
+
+    <!-- Route editor -->
+    <string name="route_empty_hint">Toca el mapa o busca para agregar tu primera parada. Agrega al menos dos para formar una ruta.</string>
+    <string name="stop_start">Inicio</string>
+    <string name="stop_destination">Destino</string>
+    <string name="stop_n">Parada %d</string>
+    <string name="wait">Espera</string>
+    <string name="move_up">Subir</string>
+    <string name="move_down">Bajar</string>
+    <string name="cd_stop_options">Opciones de la parada</string>
+    <string name="cd_expand">Expandir</string>
+    <string name="cd_collapse">Contraer</string>
+    <string name="smart">Inteligente</string>
+    <string name="smart_title">Ritmo inteligente</string>
+    <string name="smart_desc_car">Velocidades reales de la vía, semáforos y vueltas</string>
+    <string name="smart_desc_walk">Paso natural, cruces y pausas cortas</string>
+    <string name="smart_desc_line">Ritmo adaptable en línea recta</string>
+    <string name="smart_all_title">Ritmo inteligente en todos los tramos</string>
+    <string name="smart_all_desc">La velocidad se adapta a la vía en lugar de ser fija</string>
+    <string name="speed_all_legs">Velocidad para todos los tramos</string>
+
+    <!-- Wait dialog -->
+    <string name="wait_dialog_title">Espera en esta parada</string>
+    <string name="wait_dialog_body">¿Cuánto tiempo debe quedarse la ubicación aquí antes de continuar?</string>
+    <string name="hours">Horas</string>
+    <string name="minutes">Minutos</string>
+    <string name="no_wait">Ninguna</string>
+    <string name="wait_too_long">La espera puede ser de 24 horas como máximo.</string>
+
+    <!-- Saved places -->
+    <string name="saved_places">Lugares guardados</string>
+    <string name="saved_places_empty">Guarda los lugares que usas seguido para ir a ellos con un toque.</string>
+    <string name="save_place">Guardar</string>
+    <string name="save_place_title">Guardar lugar</string>
+    <string name="place_name">Nombre</string>
+    <string name="place_name_hint">p. ej. Oficina, Gimnasio, Café</string>
+    <string name="coordinates">Coordenadas</string>
+    <string name="coordinates_help">Latitud, longitud. Puedes pegar un enlace de mapa.</string>
+    <string name="coordinates_invalid">Coordenadas no válidas, p. ej. 19.4326, -99.1332</string>
+    <string name="cd_delete_place">Eliminar %s</string>
+
+    <!-- Map -->
+    <string name="cd_follow_location">Seguir ubicación</string>
+    <string name="cd_stop_following">Dejar de seguir</string>
+
+    <!-- Snackbar messages -->
+    <string name="msg_place_saved">Se guardó \"%s\"</string>
+    <string name="msg_place_deleted">Se eliminó \"%s\"</string>
+    <string name="msg_location_unavailable">Tu ubicación aún no está disponible. Inténtalo en un momento.</string>
+    <string name="msg_route_fallback">No se obtuvieron indicaciones para algunos tramos, así que usan una línea recta.</string>
+    <string name="msg_set_mock_app">Primero configura Alibi como app de ubicación de prueba en Opciones de desarrollador.</string>
+    <string name="msg_service_failed">No se pudo iniciar el servicio de ubicación.</string>
+
+    <!-- About -->
+    <string name="about_body">Simulador de ubicación y rutas de código abierto para probar apps que usan la ubicación.</string>
+    <string name="about_data">Mapas y datos © colaboradores de OpenStreetMap. Búsqueda con Photon (komoot) y Nominatim. Rutas con OSRM.</string>
+
+    <!-- Notification -->
+    <string name="notif_channel_name">Ubicación simulada</string>
+    <string name="notif_channel_desc">Se muestra mientras Alibi simula tu ubicación</string>
+    <string name="notif_title">Ubicación simulada activa</string>
+    <string name="notif_single">Manteniendo una ubicación fija</string>
+    <string name="notif_route_starting">Iniciando ruta…</string>
+    <string name="notif_route_progress">Ruta %1$d%% · faltan %2$d min</string>
+    <string name="notif_waiting">Esperando en la parada · faltan %1$s</string>
+    <string name="notif_arrived">Llegaste. Manteniendo la ubicación en el destino.</string>
+</resources>

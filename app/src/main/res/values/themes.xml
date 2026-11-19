@@ -1,4 +1,6 @@
 <resources>
-    <style name="Theme.Alibi" parent="Theme.MaterialComponents.Light" />
-    <style name="Theme.Trace" parent="Theme.Alibi" />
+    <!-- Window theme only; the UI itself is themed in Compose (ui/theme). -->
+    <style name="Theme.Alibi" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>

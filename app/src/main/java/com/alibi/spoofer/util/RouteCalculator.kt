@@ -1,10 +1,10 @@
 package com.alibi.spoofer.util
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import java.util.Locale
 import java.util.Random
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
@@ -31,135 +31,131 @@ enum class RouteMode(
     WALKING("Walking", 5f, 1f, 15f)
 }
 
+/**
+ * Geometry for one leg.
+ * @param speedsMps optional per-segment average speed from OSRM (size = points.size - 1).
+ * @param isFallback true when routing failed and this is just a straight line.
+ */
+data class RoutePolyline(
+    val points: List<LatLng>,
+    val speedsMps: List<Double>? = null,
+    val isFallback: Boolean = false
+)
+
 object RouteCalculator {
 
-    private val routeCache = ConcurrentHashMap<String, List<LatLng>>()
+    private val routeCache = ConcurrentHashMap<String, RoutePolyline>()
 
     fun clearCache() {
         routeCache.clear()
+    }
+
+    internal fun putInCache(key: String, polyline: RoutePolyline) {
+        routeCache[key] = polyline
     }
 
     fun buildCacheKey(start: LatLng, end: LatLng, mode: RouteMode): String {
         return "${mode}_${start.latitude.round(5)}_${start.longitude.round(5)}_${end.latitude.round(5)}_${end.longitude.round(5)}"
     }
 
+    /**
+     * Builds a one-point-per-second playback route for [waypoints].
+     * Waits are returned as holds (see [SimulatedRoute.holdsAtIndex]), not repeated points.
+     * The last stop's wait is ignored: playback stays at the destination until stopped.
+     */
     suspend fun calculateComplexRoute(
         waypoints: List<Waypoint>,
         isSmartDrive: Boolean = false
-    ): List<LatLng> = withContext(Dispatchers.IO) {
-        if (waypoints.size < 2) return@withContext emptyList()
-        val fullRoute = mutableListOf<LatLng>()
-        
-        val pairs = waypoints.zipWithNext()
-        for ((index, pair) in pairs.withIndex()) {
-            val (w1, w2) = pair
+    ): SimulatedRoute = withContext(Dispatchers.IO) {
+        if (waypoints.size < 2) return@withContext SimulatedRoute.EMPTY
 
-            if (index == 0 && w1.waitTimeSeconds > 0) {
-                repeat(w1.waitTimeSeconds) {
-                    fullRoute.add(w1.location)
-                }
+        val points = ArrayList<LatLng>()
+        val holds = HashMap<Int, Int>()
+        val fallbackLegs = HashSet<Int>()
+        var distance = 0.0
+
+        for ((legIndex, pair) in waypoints.zipWithNext().withIndex()) {
+            ensureActive()
+            val (from, to) = pair
+
+            val leg = fetchPolyline(from.location, to.location, from.modeToNext)
+            if (leg.isFallback) fallbackLegs += legIndex
+            distance += polylineLength(leg.points)
+
+            val sampled = if (isSmartDrive || from.isSmartDrive) {
+                sampleSmartPolyline(leg.points, from.modeToNext, leg.speedsMps)
+            } else {
+                samplePolylineDynamically(leg.points, from.speedKmHToNext)
+            }
+            if (sampled.isEmpty()) continue
+
+            if (points.isEmpty()) {
+                points.addAll(sampled)
+            } else {
+                points.addAll(sampled.drop(1))
             }
 
-            val polyline = fetchPolyline(w1.location, w2.location, w1.modeToNext)
-            
-            val sampled = if (isSmartDrive || w1.isSmartDrive) {
-                sampleSmartPolyline(polyline, w1.modeToNext)
-            } else {
-                samplePolylineDynamically(polyline, w1.speedKmHToNext)
+            if (legIndex == 0 && from.waitTimeSeconds > 0) {
+                holds[0] = from.waitTimeSeconds.coerceAtMost(Waypoint.MAX_WAIT_SECONDS)
             }
-            
-            if (index == 0 && fullRoute.isEmpty()) {
-                fullRoute.addAll(sampled)
-            } else if (index == 0) {
-                fullRoute.addAll(sampled)
-            } else {
-                if (sampled.isNotEmpty()) {
-                    fullRoute.addAll(sampled.drop(1))
-                }
-            }
-            
-            repeat(w2.waitTimeSeconds) {
-                fullRoute.add(w2.location)
+            val isLastStop = legIndex == waypoints.size - 2
+            if (!isLastStop && to.waitTimeSeconds > 0) {
+                holds[points.lastIndex] = to.waitTimeSeconds.coerceAtMost(Waypoint.MAX_WAIT_SECONDS)
             }
         }
-        
-        fullRoute
+
+        SimulatedRoute(points, holds, fallbackLegs, distance)
     }
 
     suspend fun fetchPolyline(
         start: LatLng,
         end: LatLng,
         mode: RouteMode
-    ): List<LatLng> = withContext(Dispatchers.IO) {
+    ): RoutePolyline = withContext(Dispatchers.IO) {
         when (mode) {
-            RouteMode.SIMPLE_LINE -> listOf(start, end)
-            RouteMode.CAR_RIDE, RouteMode.WALKING -> {
-                fetchOsrmPolyline(start, end, mode) ?: listOf(start, end)
-            }
+            RouteMode.SIMPLE_LINE -> RoutePolyline(listOf(start, end))
+            RouteMode.CAR_RIDE, RouteMode.WALKING ->
+                fetchOsrmPolyline(start, end, mode) ?: RoutePolyline(listOf(start, end), isFallback = true)
         }
     }
 
-    fun fetchOsrmPolyline(start: LatLng, end: LatLng, mode: RouteMode): List<LatLng>? {
-        if (mode == RouteMode.SIMPLE_LINE) return listOf(start, end)
+    fun fetchOsrmPolyline(start: LatLng, end: LatLng, mode: RouteMode): RoutePolyline? {
+        if (mode == RouteMode.SIMPLE_LINE) return RoutePolyline(listOf(start, end))
 
         val cacheKey = buildCacheKey(start, end, mode)
-        val cached = routeCache[cacheKey]
-        if (!cached.isNullOrEmpty()) {
-            return cached
-        }
+        routeCache[cacheKey]?.let { if (it.points.size >= 2) return it }
 
-        val (primaryUrl, fallbackUrl) = when (mode) {
-            RouteMode.WALKING -> Pair(
-                "https://routing.openstreetmap.de/routed-foot/route/v1/foot/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=polyline",
-                "https://router.project-osrm.org/route/v1/foot/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=polyline"
+        // Always format with a dot decimal and no scientific notation.
+        val coords = String.format(
+            Locale.US, "%.6f,%.6f;%.6f,%.6f",
+            start.longitude, start.latitude, end.longitude, end.latitude
+        )
+        val query = "?overview=full&geometries=polyline&annotations=speed"
+        val urls = when (mode) {
+            RouteMode.WALKING -> listOf(
+                "https://routing.openstreetmap.de/routed-foot/route/v1/foot/$coords$query",
+                "https://router.project-osrm.org/route/v1/foot/$coords$query"
             )
-            RouteMode.CAR_RIDE -> Pair(
-                "https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=polyline",
-                "https://routing.openstreetmap.de/routed-car/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=polyline"
+            else -> listOf(
+                "https://router.project-osrm.org/route/v1/driving/$coords$query",
+                "https://routing.openstreetmap.de/routed-car/route/v1/driving/$coords$query"
             )
-            RouteMode.SIMPLE_LINE -> return listOf(start, end)
         }
 
-        val polyline = fetchPolylineFromUrl(primaryUrl) ?: fetchPolylineFromUrl(fallbackUrl)
-        if (polyline != null && polyline.size >= 2) {
-            routeCache[cacheKey] = polyline
-            return polyline
-        }
-
-        return routeCache[cacheKey]
-    }
-
-    fun fetchOsrmPolyline(start: LatLng, end: LatLng, profile: String): List<LatLng>? {
-        val mode = if (profile == "foot" || profile == "walking") RouteMode.WALKING else RouteMode.CAR_RIDE
-        return fetchOsrmPolyline(start, end, mode)
-    }
-
-    private fun fetchPolylineFromUrl(urlString: String): List<LatLng>? {
-        var connection: HttpURLConnection? = null
-        return try {
-            val url = URL(urlString)
-            connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 5000
-                setRequestProperty("User-Agent", "Alibi/1.0 (Android; com.alibi.spoofer)")
-                setRequestProperty("Accept", "application/json")
+        for (url in urls) {
+            val res = Http.get(url)
+            if (res is HttpResult.Ok) {
+                val parsed = parseOsrmResponse(res.body)
+                if (parsed != null) {
+                    routeCache[cacheKey] = parsed
+                    return parsed
+                }
             }
-
-            val responseCode = connection.responseCode
-            if (responseCode != HttpURLConnection.HTTP_OK) return null
-
-            val inputStream = connection.inputStream
-            val bodyString = inputStream.bufferedReader().use { it.readText() }
-            parseOsrmResponse(bodyString)
-        } catch (_: Exception) {
-            null
-        } finally {
-            connection?.disconnect()
         }
+        return null
     }
 
-    private fun parseOsrmResponse(jsonString: String): List<LatLng>? {
+    internal fun parseOsrmResponse(jsonString: String): RoutePolyline? {
         return try {
             val root = JSONObject(jsonString)
             if (root.optString("code") != "Ok") return null
@@ -167,25 +163,31 @@ object RouteCalculator {
             if (routes.length() == 0) return null
             val firstRoute = routes.getJSONObject(0)
 
-            val geometryObj = firstRoute.opt("geometry") ?: return null
-
-            val points = when (geometryObj) {
-                is String -> decodePolyline(geometryObj)
+            val points = when (val geometry = firstRoute.opt("geometry")) {
+                is String -> decodePolyline(geometry)
                 is JSONObject -> {
-                    val coordinates = geometryObj.optJSONArray("coordinates") ?: return null
-                    val list = ArrayList<LatLng>(coordinates.length())
-                    for (i in 0 until coordinates.length()) {
-                        val coord = coordinates.getJSONArray(i)
-                        val lng = coord.getDouble(0)
-                        val lat = coord.getDouble(1)
-                        list.add(LatLng(lat, lng))
+                    val coordinates = geometry.optJSONArray("coordinates") ?: return null
+                    (0 until coordinates.length()).map { i ->
+                        val c = coordinates.getJSONArray(i)
+                        LatLng(c.getDouble(1), c.getDouble(0))
                     }
-                    list
                 }
                 else -> return null
             }
+            if (points.size < 2) return null
 
-            if (points.size >= 2) points else null
+            // Per-segment speeds from all legs, if present and consistent with the geometry.
+            val speeds = ArrayList<Double>()
+            val legs = firstRoute.optJSONArray("legs")
+            if (legs != null) {
+                for (l in 0 until legs.length()) {
+                    val arr = legs.getJSONObject(l).optJSONObject("annotation")?.optJSONArray("speed") ?: continue
+                    for (i in 0 until arr.length()) speeds += arr.optDouble(i, Double.NaN)
+                }
+            }
+            val usableSpeeds = speeds.takeIf { it.size == points.size - 1 && it.none { s -> s.isNaN() } }
+
+            RoutePolyline(points, usableSpeeds)
         } catch (_: Exception) {
             null
         }
@@ -222,111 +224,47 @@ object RouteCalculator {
             val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
             lng += dlng
 
-            val pLat = lat.toDouble() / 1E5
-            val pLng = lng.toDouble() / 1E5
-            poly.add(LatLng(pLat, pLng))
+            poly.add(LatLng(lat.toDouble() / 1E5, lng.toDouble() / 1E5))
         }
         return poly
     }
 
+    fun polylineLength(points: List<LatLng>): Double =
+        points.zipWithNext().sumOf { (a, b) -> computeDistanceMeters(a, b) }
+
+    /** Constant-speed sampling (with slow-down before sharp turns), one point per second. */
     fun samplePolylineDynamically(
         polyline: List<LatLng>,
         baseSpeedKmH: Double
     ): List<LatLng> {
         if (polyline.size < 2) return polyline
+        val index = PolylineIndex(polyline)
+        val baseSpeedMps = baseSpeedKmH / 3.6
 
-        val segmentDistances = DoubleArray(polyline.size - 1)
-        val cumDistances = DoubleArray(polyline.size)
-        cumDistances[0] = 0.0
-
-        for (i in 0 until (polyline.size - 1)) {
-            val dist = computeDistanceMeters(polyline[i], polyline[i + 1])
-            segmentDistances[i] = dist
-            cumDistances[i + 1] = cumDistances[i] + dist
-        }
-
-        val totalDistanceMeters = cumDistances.last()
-        val baseSpeedMps = (baseSpeedKmH * 1000.0) / 3600.0
-
-        if (totalDistanceMeters <= 0.0 || baseSpeedMps <= 0.0) {
+        if (index.totalDistance <= 0.0 || baseSpeedMps <= 0.0) {
             return listOf(polyline.first(), polyline.last())
         }
 
-        // Calculate bearings for segments to detect sharp turns
-        val segmentBearings = FloatArray(polyline.size - 1)
-        for (i in 0 until (polyline.size - 1)) {
-            segmentBearings[i] = calculateBearing(polyline[i], polyline[i + 1])
-        }
-
-        val sampledRoute = ArrayList<LatLng>()
-        sampledRoute.add(polyline.first())
-
-        var currentDistance = 0.0
-        var currentSegmentIndex = 0
+        val sampled = ArrayList<LatLng>()
+        sampled.add(polyline.first())
         val random = Random()
+        var distance = 0.0
 
-        while (currentDistance < totalDistanceMeters) {
-            // Find current segment
-            while (currentSegmentIndex < segmentDistances.size - 1 &&
-                currentDistance >= cumDistances[currentSegmentIndex + 1]
-            ) {
-                currentSegmentIndex++
-            }
-            
-            // Calculate distance to next turn
-            var nextTurnDistance = Double.MAX_VALUE
-            for (i in currentSegmentIndex until segmentDistances.size - 1) {
-                val turnAngle = abs(segmentBearings[i] - segmentBearings[i+1])
-                val normalizedTurnAngle = if (turnAngle > 180) 360 - turnAngle else turnAngle
-                if (normalizedTurnAngle > 30) {
-                    nextTurnDistance = cumDistances[i+1] - currentDistance
-                    break
-                }
-            }
-
-            // Determine dynamic speed
-            var currentSpeedMps = baseSpeedMps
-            if (nextTurnDistance < baseSpeedMps * 3) { // Approaching turn in less than 3 seconds
-                currentSpeedMps = baseSpeedMps * 0.45 // 45% speed for turn
+        while (distance < index.totalDistance) {
+            val nextTurn = index.distanceToNextTurn(distance, 30f)
+            val speed = if (nextTurn < baseSpeedMps * 3) {
+                baseSpeedMps * 0.45
             } else {
-                // Straightaway: +/- 5% random noise
-                val noise = 1.0 + (random.nextDouble() * 0.10 - 0.05)
-                currentSpeedMps = baseSpeedMps * noise
+                baseSpeedMps * (1.0 + (random.nextDouble() * 0.10 - 0.05))
             }
-
-            currentDistance += currentSpeedMps
-
-            if (currentDistance >= totalDistanceMeters) {
-                sampledRoute.add(polyline.last())
+            distance += speed
+            if (distance >= index.totalDistance) {
+                sampled.add(polyline.last())
                 break
             }
-
-            // Re-find segment in case we jumped over one
-            var targetSegment = currentSegmentIndex
-            while (targetSegment < segmentDistances.size - 1 &&
-                currentDistance >= cumDistances[targetSegment + 1]
-            ) {
-                targetSegment++
-            }
-
-            val segStartDist = cumDistances[targetSegment]
-            val segLength = segmentDistances[targetSegment]
-
-            val fraction = if (segLength > 0.0) {
-                ((currentDistance - segStartDist) / segLength).coerceIn(0.0, 1.0)
-            } else {
-                0.0
-            }
-
-            val p1 = polyline[targetSegment]
-            val p2 = polyline[targetSegment + 1]
-
-            val lat = p1.latitude + (p2.latitude - p1.latitude) * fraction
-            val lng = p1.longitude + (p2.longitude - p1.longitude) * fraction
-            sampledRoute.add(LatLng(lat, lng))
+            sampled.add(index.pointAt(distance))
         }
-
-        return sampledRoute
+        return sampled
     }
 
     fun computeDistanceMeters(start: LatLng, end: LatLng): Double {
@@ -347,410 +285,308 @@ object RouteCalculator {
 
         val y = sin(dLng) * cos(lat2)
         val x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLng)
-        val initialBearing = atan2(y, x)
-        val compassBearing = (Math.toDegrees(initialBearing) + 360) % 360
+        val compassBearing = (Math.toDegrees(atan2(y, x)) + 360) % 360
         return compassBearing.toFloat()
     }
 
     fun sampleSmartWalkPolyline(polyline: List<LatLng>): List<LatLng> {
         if (polyline.size < 2) return polyline
+        val index = PolylineIndex(polyline)
+        val total = index.totalDistance
+        if (total <= 0.0) return polyline
 
-        val segmentDistances = DoubleArray(polyline.size - 1)
-        val cumDistances = DoubleArray(polyline.size)
-        cumDistances[0] = 0.0
-
-        for (i in 0 until (polyline.size - 1)) {
-            val dist = computeDistanceMeters(polyline[i], polyline[i + 1])
-            segmentDistances[i] = dist
-            cumDistances[i + 1] = cumDistances[i] + dist
-        }
-
-        val totalDistanceMeters = cumDistances.last()
-        if (totalDistanceMeters <= 0.0) return polyline
-
-        val segmentBearings = FloatArray(polyline.size - 1)
-        for (i in 0 until (polyline.size - 1)) {
-            segmentBearings[i] = calculateBearing(polyline[i], polyline[i + 1])
-        }
-
-        val turnAngles = FloatArray(polyline.size)
-        turnAngles[0] = 0f
-        turnAngles[polyline.size - 1] = 0f
-        for (i in 1 until (polyline.size - 1)) {
-            val diff = abs(segmentBearings[i] - segmentBearings[i - 1])
-            val normalizedDiff = if (diff > 180f) 360f - diff else diff
-            turnAngles[i] = normalizedDiff
-        }
-
-        // Identify street crosswalks / intersection turns (> 35° turn)
-        data class CrosswalkWait(val nodeIndex: Int, val distanceMeters: Double, val waitDurationSec: Int)
+        // Crosswalk / intersection waits at turns > 35°
+        data class CrosswalkWait(val distanceMeters: Double, val waitDurationSec: Int)
         val crosswalkEvents = mutableListOf<CrosswalkWait>()
         val random = Random(42)
 
-        for (i in 1 until (polyline.size - 1)) {
-            if (turnAngles[i] > 35.0f) {
-                val nodeDist = cumDistances[i]
-                if (nodeDist > 15.0 && (totalDistanceMeters - nodeDist) > 15.0) {
+        for (i in 1 until polyline.size - 1) {
+            if (index.turnAngles[i] > 35.0f) {
+                val nodeDist = index.cumDistances[i]
+                if (nodeDist > 15.0 && (total - nodeDist) > 15.0) {
                     val lastEventDist = crosswalkEvents.lastOrNull()?.distanceMeters ?: -1000.0
                     if (nodeDist - lastEventDist >= 30.0) {
-                        val waitTime = 5 + random.nextInt(11) // 5 to 15 seconds wait
-                        crosswalkEvents.add(CrosswalkWait(i, nodeDist, waitTime))
+                        crosswalkEvents.add(CrosswalkWait(nodeDist, 5 + random.nextInt(11)))
                     }
                 }
             }
         }
 
-        val sampledRoute = ArrayList<LatLng>()
-        sampledRoute.add(polyline.first())
+        val sampled = ArrayList<LatLng>()
+        sampled.add(polyline.first())
 
-        var currentDistance = 0.0
+        var distance = 0.0
         var crosswalkIndex = 0
         var inCrosswalkWait = 0
         var briskCrossingRemainingMeters = 0.0
-
-        var nextMicroPauseDist = 200.0 + random.nextDouble() * 150.0 // micro-pause every 200..350m
+        var nextMicroPauseDist = 200.0 + random.nextDouble() * 150.0
         var inMicroPause = 0
-
         var stepCount = 0
-        val maxSteps = 100_000
+        val maxSteps = 200_000
 
-        while (currentDistance < totalDistanceMeters && stepCount < maxSteps) {
+        while (distance < total && stepCount < maxSteps) {
             stepCount++
 
-            // 1. Crosswalk Wait Pause
             if (inCrosswalkWait > 0) {
                 inCrosswalkWait--
-                val basePt = getPointAtDistance(polyline, cumDistances, segmentDistances, currentDistance)
-                sampledRoute.add(basePt)
-
-                if (inCrosswalkWait == 0) {
-                    // Step briskly across street (5.8 - 6.5 km/h) for ~12 meters
-                    briskCrossingRemainingMeters = 12.0
-                }
+                sampled.add(index.pointAt(distance))
+                if (inCrosswalkWait == 0) briskCrossingRemainingMeters = 12.0
                 continue
             }
 
-            // 2. Micro-Pause (phone checking, shoe tying, window shopping)
             if (inMicroPause > 0) {
                 inMicroPause--
-                val basePt = getPointAtDistance(polyline, cumDistances, segmentDistances, currentDistance)
-                sampledRoute.add(basePt)
+                sampled.add(index.pointAt(distance))
                 continue
             }
 
-            // Check if hitting next Crosswalk Wait
             if (crosswalkIndex < crosswalkEvents.size) {
-                val nextCrosswalk = crosswalkEvents[crosswalkIndex]
-                if (abs(currentDistance - nextCrosswalk.distanceMeters) < 1.5 || currentDistance >= nextCrosswalk.distanceMeters) {
-                    if (currentDistance < nextCrosswalk.distanceMeters + 2.0) {
-                        currentDistance = nextCrosswalk.distanceMeters
-                        inCrosswalkWait = nextCrosswalk.waitDurationSec
-                        crosswalkIndex++
-                        val basePt = getPointAtDistance(polyline, cumDistances, segmentDistances, currentDistance)
-                        sampledRoute.add(basePt)
-                        continue
-                    }
+                val next = crosswalkEvents[crosswalkIndex]
+                if ((abs(distance - next.distanceMeters) < 1.5 || distance >= next.distanceMeters) &&
+                    distance < next.distanceMeters + 2.0
+                ) {
+                    distance = next.distanceMeters
+                    inCrosswalkWait = next.waitDurationSec
+                    crosswalkIndex++
+                    sampled.add(index.pointAt(distance))
+                    continue
                 }
             }
 
-            // Check if triggering a Micro-Pause (every 200..350m)
-            if (currentDistance >= nextMicroPauseDist && (totalDistanceMeters - currentDistance) > 30.0 && inCrosswalkWait == 0) {
-                inMicroPause = 3 + random.nextInt(6) // 3 to 8 seconds pause
-                nextMicroPauseDist = currentDistance + 200.0 + random.nextDouble() * 150.0
-                val basePt = getPointAtDistance(polyline, cumDistances, segmentDistances, currentDistance)
-                sampledRoute.add(basePt)
+            if (distance >= nextMicroPauseDist && (total - distance) > 30.0) {
+                inMicroPause = 3 + random.nextInt(6)
+                nextMicroPauseDist = distance + 200.0 + random.nextDouble() * 150.0
+                sampled.add(index.pointAt(distance))
                 continue
             }
 
-            // 3. Determine Base Target Speed (km/h)
-            var currentSegIdx = 0
-            while (currentSegIdx < segmentDistances.size - 1 && currentDistance >= cumDistances[currentSegIdx + 1]) {
-                currentSegIdx++
+            val nextTurnDist = index.distanceToNextTurn(distance, 25f)
+            val targetSpeedKmH = when {
+                briskCrossingRemainingMeters > 0.0 -> 5.8 + random.nextDouble() * 0.7
+                nextTurnDist in 0.0..6.0 -> 3.2 + random.nextDouble() * 0.6
+                else -> 4.5 + random.nextDouble() * 0.7
             }
+            val stepDist = maxOf(0.4, targetSpeedKmH / 3.6 * (1.0 + (random.nextDouble() * 0.16 - 0.08)))
+            distance += stepDist
+            if (briskCrossingRemainingMeters > 0.0) briskCrossingRemainingMeters -= stepDist
 
-            var nextTurnDist = Double.MAX_VALUE
-            for (i in currentSegIdx until (polyline.size - 1)) {
-                if (turnAngles[i + 1] > 25f) {
-                    nextTurnDist = cumDistances[i + 1] - currentDistance
-                    break
-                }
-            }
-
-            val targetSpeedKmH: Double = when {
-                briskCrossingRemainingMeters > 0.0 -> 5.8 + random.nextDouble() * 0.7 // brisk cross: 5.8..6.5 km/h
-                nextTurnDist in 0.0..6.0 -> 3.2 + random.nextDouble() * 0.6 // slow on sharp turn: 3.2..3.8 km/h
-                else -> 4.5 + random.nextDouble() * 0.7 // normal sidewalk pace: 4.5..5.2 km/h
-            }
-
-            val baseSpeedMps = targetSpeedKmH / 3.6
-
-            // Stride speed variation (+/- 8%)
-            val strideVariation = 1.0 + (random.nextDouble() * 0.16 - 0.08)
-            val actualSpeedMps = baseSpeedMps * strideVariation
-
-            val stepDist = maxOf(0.4, actualSpeedMps)
-            currentDistance += stepDist
-
-            if (briskCrossingRemainingMeters > 0.0) {
-                briskCrossingRemainingMeters -= stepDist
-            }
-
-            if (currentDistance >= totalDistanceMeters) {
-                sampledRoute.add(polyline.last())
+            if (distance >= total) {
+                sampled.add(polyline.last())
                 break
             }
 
-            // 4. Calculate position with Lateral Gait Sway (~0.3m)
-            val basePt = getPointAtDistance(polyline, cumDistances, segmentDistances, currentDistance)
-
-            var segIdx = 0
-            while (segIdx < segmentDistances.size - 1 && cumDistances[segIdx + 1] < currentDistance) {
-                segIdx++
-            }
-            val segBearing = segmentBearings[segIdx]
-
-            // Oscillate lateral sway: ~0.3m amplitude
+            // Lateral gait sway (~0.3 m)
+            val basePt = index.pointAt(distance)
+            val segBearing = index.bearings[index.segmentAt(distance)]
             val swayMeters = 0.3 * sin(stepCount * Math.PI * 0.5)
-
             val perpBearingRad = Math.toRadians((segBearing + 90.0) % 360.0)
             val deltaLat = (swayMeters * cos(perpBearingRad)) / 111000.0
             val deltaLng = (swayMeters * sin(perpBearingRad)) / (111000.0 * cos(Math.toRadians(basePt.latitude)))
-
-            val swayedPt = LatLng(basePt.latitude + deltaLat, basePt.longitude + deltaLng)
-            sampledRoute.add(swayedPt)
+            sampled.add(LatLng(basePt.latitude + deltaLat, basePt.longitude + deltaLng))
         }
-
-        return sampledRoute
+        return sampled
     }
 
+    /**
+     * "Smart" sampling: accelerates from rest, slows for turns, stops at likely
+     * traffic lights. When OSRM [speedsMps] are available they set the cruising
+     * speed per segment; otherwise it's estimated from segment length.
+     */
     fun sampleSmartPolyline(
         polyline: List<LatLng>,
-        mode: RouteMode = RouteMode.CAR_RIDE
+        mode: RouteMode = RouteMode.CAR_RIDE,
+        speedsMps: List<Double>? = null
     ): List<LatLng> {
-        if (mode == RouteMode.WALKING) {
-            return sampleSmartWalkPolyline(polyline)
-        }
+        if (mode == RouteMode.WALKING) return sampleSmartWalkPolyline(polyline)
         if (polyline.size < 2) return polyline
 
-        val segmentDistances = DoubleArray(polyline.size - 1)
-        val cumDistances = DoubleArray(polyline.size)
-        cumDistances[0] = 0.0
+        val index = PolylineIndex(polyline)
+        val total = index.totalDistance
+        if (total <= 0.0) return polyline
 
-        for (i in 0 until (polyline.size - 1)) {
-            val dist = computeDistanceMeters(polyline[i], polyline[i + 1])
-            segmentDistances[i] = dist
-            cumDistances[i + 1] = cumDistances[i] + dist
-        }
-
-        val totalDistanceMeters = cumDistances.last()
-        if (totalDistanceMeters <= 0.0) return polyline
-
-        // Calculate segment bearings and turn angles
-        val segmentBearings = FloatArray(polyline.size - 1)
-        for (i in 0 until (polyline.size - 1)) {
-            segmentBearings[i] = calculateBearing(polyline[i], polyline[i + 1])
-        }
-
-        val turnAngles = FloatArray(polyline.size) // angle at node i
-        turnAngles[0] = 0f
-        turnAngles[polyline.size - 1] = 0f
-        for (i in 1 until (polyline.size - 1)) {
-            val diff = abs(segmentBearings[i] - segmentBearings[i - 1])
-            val normalizedDiff = if (diff > 180f) 360f - diff else diff
-            turnAngles[i] = normalizedDiff
-        }
-
-        // Determine base target speed per segment based on node stretch length
-        val segmentRoadSpeedsKmH = DoubleArray(polyline.size - 1)
-        for (i in 0 until (polyline.size - 1)) {
-            val d = segmentDistances[i]
-            segmentRoadSpeedsKmH[i] = when {
-                d > 150.0 -> (80.0 + ((d - 150.0) / 10.0).coerceAtMost(30.0))
-                d < 60.0 -> (30.0 + (d / 60.0) * 15.0)
-                else -> (45.0 + ((d - 60.0) / 90.0) * 35.0)
+        val segmentRoadSpeedsKmH = DoubleArray(polyline.size - 1) { i ->
+            val routed = speedsMps?.getOrNull(i)
+            if (routed != null && routed > 0.5) {
+                (routed * 3.6).coerceIn(10.0, 130.0)
+            } else {
+                val d = index.segmentDistances[i]
+                when {
+                    d > 150.0 -> 80.0 + ((d - 150.0) / 10.0).coerceAtMost(30.0)
+                    d < 60.0 -> 30.0 + (d / 60.0) * 15.0
+                    else -> 45.0 + ((d - 60.0) / 90.0) * 35.0
+                }
             }
         }
 
-        // Identify Traffic Light Stops & Major Intersections
+        // Traffic light stops & major intersections
         data class StopEvent(val distanceMeters: Double, val durationSeconds: Int)
         val stopEvents = mutableListOf<StopEvent>()
         val random = Random(42)
-
         var urbanDistSinceStop = 0.0
-        for (i in 1 until (polyline.size - 1)) {
-            val dPrev = segmentDistances[i - 1]
-            val nodeDist = cumDistances[i]
-            val angle = turnAngles[i]
-
-            val isMajorIntersection = angle > 40.0f
-            if (dPrev < 80.0) {
-                urbanDistSinceStop += dPrev
-            }
-
+        for (i in 1 until polyline.size - 1) {
+            val dPrev = index.segmentDistances[i - 1]
+            val nodeDist = index.cumDistances[i]
+            if (dPrev < 80.0) urbanDistSinceStop += dPrev
+            val isMajorIntersection = index.turnAngles[i] > 40.0f
             val isPeriodicUrbanStop = urbanDistSinceStop >= 450.0
-
-            if ((isMajorIntersection || isPeriodicUrbanStop) && nodeDist > 50.0 && (totalDistanceMeters - nodeDist) > 50.0) {
+            if ((isMajorIntersection || isPeriodicUrbanStop) && nodeDist > 50.0 && (total - nodeDist) > 50.0) {
                 val lastStopDist = stopEvents.lastOrNull()?.distanceMeters ?: -1000.0
                 if (nodeDist - lastStopDist >= 100.0) {
-                    val stopTime = 12 + random.nextInt(14) // 12 to 25 seconds
-                    stopEvents.add(StopEvent(nodeDist, stopTime))
+                    stopEvents.add(StopEvent(nodeDist, 12 + random.nextInt(14)))
                     urbanDistSinceStop = 0.0
                 }
             }
         }
 
-        val sampledRoute = ArrayList<LatLng>()
-        sampledRoute.add(polyline.first())
+        val sampled = ArrayList<LatLng>()
+        sampled.add(polyline.first())
 
-        var currentDistance = 0.0
-        var currentSpeedMps = 0.0 // start from rest
+        var distance = 0.0
+        var speedMps = 0.0
         var stopEventIndex = 0
-
         var inStopCountdown = 0
         var activeStopDist = -1.0
-
         var isAccelerating = true
         var accelElapsed = 0.0
-        var accelTotalSec = 6.0 // 5-7 seconds
-
+        var accelTotalSec = 6.0
         var isDecelerating = false
         var decelElapsed = 0.0
-        var decelTotalSec = 5.0 // 4-6 seconds
+        var decelTotalSec = 5.0
         var decelStartSpeedMps = 0.0
-
-        val getPointAtDist = { targetDist: Double ->
-            getPointAtDistance(polyline, cumDistances, segmentDistances, targetDist)
-        }
-
-        val maxSteps = 100_000
         var stepCount = 0
+        val maxSteps = 200_000
 
-        while (currentDistance < totalDistanceMeters && stepCount < maxSteps) {
+        while (distance < total && stepCount < maxSteps) {
             stepCount++
 
-            // 1. If currently at a full traffic light stop
             if (inStopCountdown > 0) {
                 inStopCountdown--
-                sampledRoute.add(getPointAtDist(activeStopDist))
-
+                sampled.add(index.pointAt(activeStopDist))
                 if (inStopCountdown == 0) {
                     isAccelerating = true
                     accelElapsed = 0.0
                     accelTotalSec = 5.0 + random.nextDouble() * 2.0
-                    currentSpeedMps = 0.0
+                    speedMps = 0.0
                 }
                 continue
             }
 
-            // 2. Determine target road cruising speed at current distance
-            var targetSegIdx = 0
-            while (targetSegIdx < segmentDistances.size - 1 && currentDistance >= cumDistances[targetSegIdx + 1]) {
-                targetSegIdx++
-            }
-            val roadSpeedKmH = segmentRoadSpeedsKmH[targetSegIdx]
-            var targetSpeedMps = roadSpeedKmH / 3.6
-
-            // Check if approaching sharp turn (< 30m ahead)
-            var nextTurnDist = Double.MAX_VALUE
-            for (i in targetSegIdx until (polyline.size - 1)) {
-                if (turnAngles[i + 1] > 30f) {
-                    nextTurnDist = cumDistances[i + 1] - currentDistance
-                    break
-                }
-            }
-            if (nextTurnDist in 0.0..30.0) {
-                val turnSpeedMps = 20.0 / 3.6
-                targetSpeedMps = minOf(targetSpeedMps, turnSpeedMps)
+            var targetSpeedMps = segmentRoadSpeedsKmH[index.segmentAt(distance)] / 3.6
+            if (index.distanceToNextTurn(distance, 30f) in 0.0..30.0) {
+                targetSpeedMps = minOf(targetSpeedMps, 20.0 / 3.6)
             }
 
-            // 3. Check for upcoming Traffic Light Stop
-            if (stopEventIndex < stopEvents.size) {
+            if (stopEventIndex < stopEvents.size && !isDecelerating) {
                 val nextStop = stopEvents[stopEventIndex]
-                val distToStop = nextStop.distanceMeters - currentDistance
-
-                val neededDecelDist = (currentSpeedMps * 5.0 / 2.0) + 5.0
-
-                if (distToStop in 0.0..neededDecelDist && !isDecelerating) {
+                val distToStop = nextStop.distanceMeters - distance
+                if (distToStop in 0.0..((speedMps * 5.0 / 2.0) + 5.0)) {
                     isDecelerating = true
                     isAccelerating = false
-                    decelStartSpeedMps = maxOf(currentSpeedMps, 5.0)
+                    decelStartSpeedMps = maxOf(speedMps, 5.0)
                     decelElapsed = 0.0
                     decelTotalSec = 4.0 + random.nextDouble() * 2.0
                     activeStopDist = nextStop.distanceMeters
                 }
             }
 
-            // 4. Calculate current step speed using S-curve or Cruising Noise
             if (isDecelerating) {
                 decelElapsed += 1.0
                 val progress = (decelElapsed / decelTotalSec).coerceIn(0.0, 1.0)
-                val factor = 0.5 * (1.0 + cos(Math.PI * progress))
-                currentSpeedMps = decelStartSpeedMps * factor
-
-                if (progress >= 1.0 || (currentDistance + currentSpeedMps) >= activeStopDist) {
-                    currentDistance = activeStopDist
-                    currentSpeedMps = 0.0
+                speedMps = decelStartSpeedMps * 0.5 * (1.0 + cos(Math.PI * progress))
+                if (progress >= 1.0 || (distance + speedMps) >= activeStopDist) {
+                    distance = activeStopDist
+                    speedMps = 0.0
                     inStopCountdown = stopEvents[stopEventIndex].durationSeconds
                     stopEventIndex++
                     isDecelerating = false
-                    sampledRoute.add(getPointAtDist(activeStopDist))
+                    sampled.add(index.pointAt(activeStopDist))
                     continue
                 }
             } else if (isAccelerating) {
                 accelElapsed += 1.0
                 val progress = (accelElapsed / accelTotalSec).coerceIn(0.0, 1.0)
-                val factor = 0.5 * (1.0 - cos(Math.PI * progress))
-                currentSpeedMps = targetSpeedMps * factor
-
-                if (progress >= 1.0) {
-                    isAccelerating = false
-                }
+                speedMps = targetSpeedMps * 0.5 * (1.0 - cos(Math.PI * progress))
+                if (progress >= 1.0) isAccelerating = false
             } else {
-                val noise = 1.0 + (random.nextDouble() * 0.06 - 0.03)
-                currentSpeedMps = targetSpeedMps * noise
+                speedMps = targetSpeedMps * (1.0 + (random.nextDouble() * 0.06 - 0.03))
             }
 
-            currentDistance += maxOf(0.5, currentSpeedMps)
-
-            if (currentDistance >= totalDistanceMeters) {
-                sampledRoute.add(polyline.last())
+            distance += maxOf(0.5, speedMps)
+            if (distance >= total) {
+                sampled.add(polyline.last())
                 break
             }
-
-            sampledRoute.add(getPointAtDist(currentDistance))
+            sampled.add(index.pointAt(distance))
         }
-
-        return sampledRoute
+        return sampled
     }
 
-    private fun getPointAtDistance(
-        polyline: List<LatLng>,
-        cumDistances: DoubleArray,
-        segmentDistances: DoubleArray,
-        targetDist: Double
-    ): LatLng {
-        if (targetDist <= 0.0) return polyline.first()
-        if (targetDist >= cumDistances.last()) return polyline.last()
+    /**
+     * Precomputed distances/bearings for a polyline, with O(log n) lookups so
+     * sampling long routes doesn't rescan the whole path every second.
+     */
+    private class PolylineIndex(val polyline: List<LatLng>) {
+        val segmentDistances = DoubleArray(polyline.size - 1)
+        val cumDistances = DoubleArray(polyline.size)
+        val bearings = FloatArray(polyline.size - 1)
+        /** Turn angle at each node (0 at the ends). */
+        val turnAngles = FloatArray(polyline.size)
+        private val nextTurnCache = HashMap<Float, IntArray>()
 
-        var segIdx = 0
-        while (segIdx < segmentDistances.size - 1 && cumDistances[segIdx + 1] < targetDist) {
-            segIdx++
+        init {
+            for (i in 0 until polyline.size - 1) {
+                segmentDistances[i] = computeDistanceMeters(polyline[i], polyline[i + 1])
+                cumDistances[i + 1] = cumDistances[i] + segmentDistances[i]
+                bearings[i] = calculateBearing(polyline[i], polyline[i + 1])
+            }
+            for (i in 1 until polyline.size - 1) {
+                val diff = abs(bearings[i] - bearings[i - 1])
+                turnAngles[i] = if (diff > 180f) 360f - diff else diff
+            }
         }
 
-        val segStartDist = cumDistances[segIdx]
-        val segLength = segmentDistances[segIdx]
+        val totalDistance: Double get() = cumDistances.last()
 
-        val fraction = if (segLength > 0.0) {
-            ((targetDist - segStartDist) / segLength).coerceIn(0.0, 1.0)
-        } else {
-            0.0
+        /** Index of the segment containing [d]. */
+        fun segmentAt(d: Double): Int {
+            if (d <= 0.0) return 0
+            var lo = 0
+            var hi = segmentDistances.size - 1
+            while (lo < hi) {
+                val mid = (lo + hi + 1) ushr 1
+                if (cumDistances[mid] < d) lo = mid else hi = mid - 1
+            }
+            return lo
         }
 
-        val p1 = polyline[segIdx]
-        val p2 = polyline[segIdx + 1]
+        fun pointAt(d: Double): LatLng {
+            if (d <= 0.0) return polyline.first()
+            if (d >= totalDistance) return polyline.last()
+            val seg = segmentAt(d)
+            val len = segmentDistances[seg]
+            val f = if (len > 0.0) ((d - cumDistances[seg]) / len).coerceIn(0.0, 1.0) else 0.0
+            val p1 = polyline[seg]
+            val p2 = polyline[seg + 1]
+            return LatLng(
+                p1.latitude + (p2.latitude - p1.latitude) * f,
+                p1.longitude + (p2.longitude - p1.longitude) * f
+            )
+        }
 
-        val lat = p1.latitude + (p2.latitude - p1.latitude) * fraction
-        val lng = p1.longitude + (p2.longitude - p1.longitude) * fraction
-        return LatLng(lat, lng)
+        /** Distance from [d] to the next node with a turn sharper than [threshold], or MAX_VALUE. */
+        fun distanceToNextTurn(d: Double, threshold: Float): Double {
+            val next = nextTurnCache.getOrPut(threshold) {
+                // next[i] = first node index >= i whose turn angle exceeds threshold, or -1
+                IntArray(polyline.size).also { arr ->
+                    var upcoming = -1
+                    for (i in polyline.size - 1 downTo 0) {
+                        if (turnAngles[i] > threshold) upcoming = i
+                        arr[i] = upcoming
+                    }
+                }
+            }
+            val node = next[segmentAt(d) + 1]
+            return if (node < 0) Double.MAX_VALUE else cumDistances[node] - d
+        }
     }
 }
